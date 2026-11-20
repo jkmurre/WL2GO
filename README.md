@@ -6,6 +6,12 @@ WL2GO puts the soft-modem, the Winlink protocol engine and rig control in one de
 
 > **Status: early development.** macOS on Apple Silicon is the only platform built and tested so far. Expect rough edges, and check transmissions on air carefully.
 
+## Download
+
+Test builds for Macs with Apple Silicon running **macOS 26 (Tahoe) or later** are on the [Releases page](https://github.com/jkmurre/WL2GO/releases). Each zip contains `WL2GO.app` and its release notes. The notes explain how to open a build that isn't signed with an Apple Developer ID (see [RELEASE_NOTES.md](RELEASE_NOTES.md)).
+
+Builds aren't packaged for Windows or Linux yet.
+
 ## Features
 
 - **Connections:** Telnet to the Winlink CMS, and ARDOP over HF through a bundled soft-modem.
@@ -30,6 +36,8 @@ Each one is built from a pinned upstream commit or checksummed tarball, with a s
 ## Building from source
 
 Prerequisites (macOS, Apple Silicon):
+
+The bundled programs are built for the macOS version you build on, so the app runs on that version or newer.
 
 - Node.js 22.18 or later
 - Go 1.27.4 or later (stdlib security fixes reach Pat only through the toolchain)
