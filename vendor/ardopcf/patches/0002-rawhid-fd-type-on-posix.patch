@@ -1,0 +1,22 @@
+diff --git a/lib/rawhid/rawhid.c b/lib/rawhid/rawhid.c
+index 8791788..c299892 100644
+--- a/lib/rawhid/rawhid.c
++++ b/lib/rawhid/rawhid.c
+@@ -338,7 +338,17 @@ void print_win32_err(void)
+ 
+ 
+ char * HIDDevice = 0;
++/*
++ * On Windows this is an hidapi handle. On POSIX the device is opened with
++ * open() and the result is passed to read()/write()/close(), so it is a file
++ * descriptor and must be typed as one -- storing an int fd in a pointer is a
++ * type error that clang and GCC 14+ reject outright.
++ */
++#ifdef WIN32
+ hid_device * CM108Handle = 0;
++#else
++int CM108Handle = 0;
++#endif
+ unsigned char HIDRXBuffer[100];
+ int HIDRXLen = 0;
+ unsigned char HIDTXBuffer[100];

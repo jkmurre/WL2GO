@@ -1,0 +1,50 @@
+From: WL2GO
+Subject: Reset the ARQ timeout when our IDLE keepalive is answered
+
+The ISS with nothing to send goes to protocol state IDLE and transmits an
+IDLE frame every ~3 seconds; the IRS answers each one with a DataACK. That
+exchange is the protocol's keepalive -- and upstream ages it asymmetrically.
+The IRS restarts its timeout clock on every IDLE it receives
+(ProcessRcvdARQFrame, IRS case, IDLEFRAME handler: dttTimeoutTrip = Now,
+both branches). The ISS's IDLE-state DataACK handler restarts nothing: it
+logs "Ignore, will repeat IDLE" and returns, so the ISS counts ARQTimeout
+(default 120 s) from the last actual DATA transfer no matter how many valid
+ACKs arrive.
+
+On a healthy link this means the ISS unilaterally declares the session dead
+at exactly ARQTimeout while the IRS would have held it forever. Seen three
+times in one afternoon against RMS Trimode gateway N0GWY: a message proposal
+delivered and ACKed, the gateway's CMS backhaul slow to produce the FS
+response, its modem ACKing our every keepalive with distance-0.01 decodes --
+and our side, not the silent one, tearing the session down at 120 s.
+
+The fix is one line: a valid in-session DataACK received in state IDLE
+restarts dttTimeoutTrip, mirroring what the IRS already does for the IDLE
+that provoked it. A session now survives for as long as the two modems can
+actually hear each other; a genuinely dead link still times out exactly as
+before, because a dead link produces no ACKs. Runaway sessions remain
+bounded by the host (Pat / the operator's abort) and by the far gateway's
+own session limits.
+
+diff --git a/src/common/ARQ.c b/src/common/ARQ.c
+index 1b44fa7..57c450b 100644
+--- a/src/common/ARQ.c
++++ b/src/common/ARQ.c
+@@ -1766,6 +1766,17 @@ void ProcessRcvdARQFrame(UCHAR intFrameType, UCHAR * bytData, int DataLen, BOOL
+ 			return;  // No decode so continue to wait
+ 
+ 		if (intFrameType >= DataACKmin) {
++			// A valid DataACK carrying this session's ID is the IRS answering
++			// our IDLE keepalive: proof the link is alive in both directions.
++			// Restart the timeout clock, exactly as the IRS restarts its own
++			// on receiving that IDLE (see the IDLEFRAME handler in the IRS
++			// case above).  Without this the two sides age asymmetrically --
++			// the IRS holds the session for as long as IDLEs keep arriving,
++			// while the ISS counts ARQTimeout from the last DATA transfer and
++			// unilaterally disconnects a perfectly healthy link.  Seen in the
++			// field as a Winlink gateway with a slow CMS backhaul ACKing every
++			// keepalive for two minutes while we, not it, gave up.
++			dttTimeoutTrip = Now;
+ 			if (bytDataToSendLength > 0)  // If ACK and Data to send
+ 			{
+ 				ZF_LOGI("[ARDOPprotocol.ProcessedRcvdARQFrame] Protocol state IDLE, ACK Received with Data to send. Go to ISS Data state.");

@@ -1,0 +1,55 @@
+diff --git a/Makefile b/Makefile
+index d6d4eb1..72ea1cb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -82,6 +82,12 @@ OBJS_WIN = \
+ 	src/windows/Waveout.o \
+ 	lib/hid/hid.o \
+ 
++# Platform-agnostic audio backend (PortAudio). The serial/PTT glue is plain
++# POSIX and is shared with the Linux build.
++OBJS_PA = \
++	src/portaudio/PaSound.o \
++	src/linux/LinSerial.o \
++
+ # user-facing executables, like ardopcf
+ OBJS_EXE = \
+ 	src/common/ardopcf.o \
+@@ -123,7 +129,36 @@ TXT2C ?=
+ # Leave empty for OS auto-detection
+ WIN32 ?= $(filter $(OS),Windows_NT)
+ 
+-ifneq ($(WIN32),)
++# AUDIO selects the audio backend:
++#   portaudio - one implementation for every platform, via PortAudio.
++#   native    - the platform's own backend (ALSA on Linux, WinMM on Windows).
++# macOS has no native backend here, so it defaults to portaudio.
++# PORTAUDIO_CFLAGS / PORTAUDIO_LIBS locate the library; when unset, pkg-config
++# style defaults are assumed.
++UNAME_S := $(shell uname -s 2>/dev/null)
++
++ifeq ($(UNAME_S),Darwin)
++AUDIO ?= portaudio
++endif
++AUDIO ?= native
++
++PORTAUDIO_LIBS ?= -lportaudio
++
++ifeq ($(AUDIO),portaudio)
++OBJS += $(OBJS_PA)
++CPPFLAGS += $(PORTAUDIO_CFLAGS)
++LDLIBS += $(PORTAUDIO_LIBS)
++ifeq ($(UNAME_S),Darwin)
++# CoreAudio and friends back PortAudio on macOS. Apple's ld spells the link-map
++# option '-map <file>' where GNU ld uses '-Map=<file>'.
++LDLIBS += -framework CoreAudio -framework AudioToolbox -framework AudioUnit \
++          -framework CoreFoundation -framework CoreServices
++LDFLAGS = -Xlinker -map -Xlinker output.map
++CC = cc
++else
++LDLIBS += -lrt
++endif
++else ifneq ($(WIN32),)
+ OBJS += $(OBJS_WIN)
+ LDLIBS += -lwsock32 -lwinmm -lsetupapi -lws2_32
+ else

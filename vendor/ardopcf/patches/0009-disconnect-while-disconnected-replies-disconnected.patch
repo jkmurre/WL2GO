@@ -1,0 +1,38 @@
+From: WL2GO
+Subject: Answer DISCONNECT-while-disconnected with DISCONNECTED
+
+wl2k-go's transport/ardop conn.Close() writes DISCONNECT and then waits up
+to 30 seconds for DISCONNECTED (or NEWSTATE DISC) before giving up with an
+ABORT, and Pat's fbb layer closes the connection twice -- once explicitly
+and once from a defer. The second DISCONNECT arrives after the session has
+already ended, gets only "DISCONNECT IGNORED" (which wl2k-go does not treat
+as an answer), and the whole teardown stalls exactly 30 seconds after the
+CW ID has finished. The same stall bites an operator pressing Disconnect
+when nothing is connected.
+
+When we are genuinely disconnected, saying DISCONNECTED is honest and lets
+the host's wait complete immediately. The reply is guarded to DISC/OFFLINE
+so FEC and ARQ-in-progress states keep their existing behaviour, and it is
+only ever sent in direct response to a host DISCONNECT, so it cannot fire
+mid-dial.
+
+diff --git a/src/common/HostInterface.c b/src/common/HostInterface.c
+index 0ba4eca..cf24365 100644
+--- a/src/common/HostInterface.c
++++ b/src/common/HostInterface.c
+@@ -629,7 +629,15 @@ void ProcessCommandFromHost(char * strCMD)
+ 			SendReplyToHost("DISCONNECT NOW TRUE");
+ 		}
+ 		else
++		{
+ 			SendReplyToHost("DISCONNECT IGNORED");
++			// A host that asks to disconnect while nothing is connected is
++			// waiting for DISCONNECTED (wl2k-go's conn.Close waits 30 s for
++			// it, then aborts). When we are genuinely disconnected, say so,
++			// so the host's wait completes now instead of timing out.
++			if (ProtocolState == DISC || ProtocolState == OFFLINE)
++				QueueCommandToHost("DISCONNECTED");
++		}
+ 
+ 		goto cmddone;
+ 	}

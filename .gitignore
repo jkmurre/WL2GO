@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+release/
+.build/
+resources/bin/
+*.log
+.DS_Store
+resources/licenses/
+
+# Local-only working notes and stray build output
+handoff.md
+/index.js

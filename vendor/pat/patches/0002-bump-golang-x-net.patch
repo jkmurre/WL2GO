@@ -1,0 +1,69 @@
+From: WL2GO
+Subject: Bump golang.org/x/net to v0.60.0
+
+v0.38.0 carries advisories reachable from Pat's HTTP client and server paths
+(govulncheck: GO-2026-5026, GO-2026-6603, GO-2026-6610, GO-2026-6611,
+GO-2026-6612, GO-2026-6617). x/sys and x/term move with it, and the module's
+go directive rises to 1.26.0, which x/net v0.60.0 requires.
+---
+diff --git a/go.mod b/go.mod
+index 9220ded..f99f70e 100644
+--- a/go.mod
++++ b/go.mod
+@@ -1,6 +1,6 @@
+ module github.com/la5nta/pat
+ 
+-go 1.24.0
++go 1.26.0
+ 
+ tool golang.org/x/vuln/cmd/govulncheck
+ 
+@@ -22,7 +22,7 @@ require (
+ 	github.com/peterh/liner v1.2.2
+ 	github.com/spf13/pflag v1.0.10
+ 	golang.org/x/sync v0.19.0
+-	golang.org/x/term v0.30.0
++	golang.org/x/term v0.46.0
+ )
+ 
+ require (
+@@ -38,8 +38,8 @@ require (
+ 	github.com/paulrosania/go-charset v0.0.0-20190326053356-55c9d7a5834c // indirect
+ 	go.uber.org/multierr v1.11.0 // indirect
+ 	golang.org/x/mod v0.22.0 // indirect
+-	golang.org/x/net v0.38.0 // indirect
+-	golang.org/x/sys v0.40.0 // indirect
++	golang.org/x/net v0.60.0 // indirect
++	golang.org/x/sys v0.48.0 // indirect
+ 	golang.org/x/telemetry v0.0.0-20240522233618-39ace7a40ae7 // indirect
+ 	golang.org/x/tools v0.29.0 // indirect
+ 	golang.org/x/vuln v1.1.4 // indirect
+diff --git a/go.sum b/go.sum
+index 93836ff..59ef287 100644
+--- a/go.sum
++++ b/go.sum
+@@ -86,18 +86,18 @@ go.uber.org/multierr v1.11.0 h1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=
+ go.uber.org/multierr v1.11.0/go.mod h1:20+QtiLqy0Nd6FdQB9TLXag12DsQkrbs3htMFfDN80Y=
+ golang.org/x/mod v0.22.0 h1:D4nJWe9zXqHOmWqj4VMOJhvzj7bEZg4wEYa759z1pH4=
+ golang.org/x/mod v0.22.0/go.mod h1:6SkKJ3Xj0I0BrPOZoBy3bdMptDDU9oJrpohJ3eWZ1fY=
+-golang.org/x/net v0.38.0 h1:vRMAPTMaeGqVhG5QyLJHqNDwecKTomGeqbnfZyKlBI8=
+-golang.org/x/net v0.38.0/go.mod h1:ivrbrMbzFq5J41QOQh0siUuly180yBYtLp+CKbEaFx8=
++golang.org/x/net v0.60.0 h1:79p50tfZlm0J9YfoDsSi639qSXNGVwEzOPLCxM2FsYU=
++golang.org/x/net v0.60.0/go.mod h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=
+ golang.org/x/sync v0.19.0 h1:vV+1eWNmZ5geRlYjzm2adRgW2/mcpevXNg50YZtPCE4=
+ golang.org/x/sync v0.19.0/go.mod h1:9KTHXmSnoGruLpwFjVSX0lNNA75CykiMECbovNTZqGI=
+ golang.org/x/sys v0.0.0-20211117180635-dee7805ff2e1/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+ golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+-golang.org/x/sys v0.40.0 h1:DBZZqJ2Rkml6QMQsZywtnjnnGvHza6BTfYFWY9kjEWQ=
+-golang.org/x/sys v0.40.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
++golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
++golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
+ golang.org/x/telemetry v0.0.0-20240522233618-39ace7a40ae7 h1:FemxDzfMUcK2f3YY4H+05K9CDzbSVr2+q/JKN45pey0=
+ golang.org/x/telemetry v0.0.0-20240522233618-39ace7a40ae7/go.mod h1:pRgIJT+bRLFKnoM1ldnzKoxTIn14Yxz928LQRYYgIN0=
+-golang.org/x/term v0.30.0 h1:PQ39fJZ+mfadBm0y5WlL4vlM7Sx1Hgf13sMIY2+QS9Y=
+-golang.org/x/term v0.30.0/go.mod h1:NYYFdzHoI5wRh/h5tDMdMqCqPJZEuNqVR5xJLd/n67g=
++golang.org/x/term v0.46.0 h1:3+OXuTbaKDgwk8jTi3aSLHRlmWqHEUDUtxnbFigO4YE=
++golang.org/x/term v0.46.0/go.mod h1:+K02xbkittuwc0Am4abfA3Fc+XRGXkvBXNO88NCXPoc=
+ golang.org/x/tools v0.29.0 h1:Xx0h3TtM9rzQpQuR4dKLrdglAmCEN5Oi+P74JdhdzXE=
+ golang.org/x/tools v0.29.0/go.mod h1:KMQVMRsVxU6nHCFXrBPhDB8XncLNLM0lIy/F14RP588=
+ golang.org/x/vuln v1.1.4 h1:Ju8QsuyhX3Hk8ma3CesTbO8vfJD9EvUBgHvkxHBzj0I=

@@ -1,0 +1,381 @@
+From: WL2GO
+Subject: Expose the hybrid station list and Message Pickup Stations on the HTTP API
+
+Radio-Only operation -- Winlink's hybrid network, which keeps mail moving over
+RF when the internet is down -- needs two things from the CMS: which RMS
+gateways are hybrid stations, and which of them hold the operator's mail (the
+Message Pickup Stations). Upstream implements both only as CLI subcommands
+(cli/mps.go). These routes expose the same cmsapi calls to the client that
+spawned this process, with the same three-station limit, so that client never
+needs an api.winlink.org access key of its own:
+
+  GET    /api/wl2go/hybrid_stations
+  GET    /api/wl2go/mps
+  POST   /api/wl2go/mps   {"callsign": "..."}
+  DELETE /api/wl2go/mps   (clears every entry; the CMS has no single delete)
+
+The password is the configured secure_login_password, as the existing
+winlink-account handlers use. Errors are JSON with a "kind" of network, cms or
+request, so the client can tell "offline" from "refused". Every route sits
+behind the 0001 guard.
+---
+diff --git a/api/api.go b/api/api.go
+index 7f39760..d27d360 100644
+--- a/api/api.go
++++ b/api/api.go
+@@ -124,6 +124,9 @@ func NewHandler(app *app.App) *Handler {
+ 	r.HandleFunc("/api/winlink-account/password-recovery-email", h.winlinkPasswordRecoveryEmailHandler).Methods("GET", "PUT")
+ 	r.HandleFunc("/api/winlink-account/registration", h.winlinkAccountRegistrationHandler).Methods("GET", "POST")
+ 
++	r.HandleFunc("/api/wl2go/hybrid_stations", h.hybridStationsHandler).Methods("GET")
++	r.HandleFunc("/api/wl2go/mps", h.pickupStationsHandler).Methods("GET", "POST", "DELETE")
++
+ 	r.HandleFunc("/ws", h.wsHandler)
+ 	r.PathPrefix("/ui").Handler(web.UIHandler(h.Options().MyCall))
+ 	r.PathPrefix("/dist").Handler(web.DistHandler())
+diff --git a/api/wl2go_hybrid.go b/api/wl2go_hybrid.go
+new file mode 100644
+index 0000000..7d7f87e
+--- /dev/null
++++ b/api/wl2go_hybrid.go
+@@ -0,0 +1,194 @@
++// WL2GO: the Winlink hybrid network over the HTTP API.
++//
++// Pat implements the hybrid station list and Message Pickup Stations only as
++// CLI subcommands (cli/mps.go). These handlers expose the same cmsapi calls to
++// the app that spawned this process, with the same rules, so the app never
++// needs an access key of its own.
++
++package api
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"net/url"
++	"regexp"
++	"strings"
++	"time"
++
++	"github.com/la5nta/pat/internal/cmsapi"
++)
++
++// MaxPickupStations is the Winlink limit on Message Pickup Stations per
++// account. Mirrors cli/mps.go:mpsAddHandle.
++const MaxPickupStations = 3
++
++var pickupCallsignRe = regexp.MustCompile(`^[A-Z0-9]{3,}(-\d{1,2})?$`)
++
++// Indirection over cmsapi, so the handlers are testable without the network.
++var (
++	hybridStationList = cmsapi.HybridStationList
++	mpsGet            = cmsapi.MPSGet
++	mpsAdd            = cmsapi.MPSAdd
++	mpsDelete         = cmsapi.MPSDelete
++)
++
++type hybridStationJSON struct {
++	Callsign            string `json:"callsign"`
++	AutomaticForwarding bool   `json:"automaticForwarding"`
++	ManualForwarding    bool   `json:"manualForwarding"`
++}
++
++type pickupStationJSON struct {
++	Callsign string `json:"callsign"`
++	AddedAt  string `json:"addedAt"`
++}
++
++// wl2goError is the error body for these routes. Kind lets the client tell
++// "the internet is unreachable" (network) from "Winlink said no" (cms) from
++// "the request itself is wrong" (request) without parsing message text.
++type wl2goError struct {
++	Error string `json:"error"`
++	Kind  string `json:"kind"`
++}
++
++func writeWL2GOError(w http.ResponseWriter, status int, kind string, err error) {
++	w.Header().Set("Content-Type", "application/json")
++	w.WriteHeader(status)
++	json.NewEncoder(w).Encode(wl2goError{Error: err.Error(), Kind: kind})
++}
++
++// writeCMSError classifies a cmsapi failure. http.Client.Do wraps every
++// transport failure -- DNS, refused, timeout -- in *url.Error; anything else
++// came back from the CMS.
++func writeCMSError(w http.ResponseWriter, err error) {
++	var urlErr *url.Error
++	if errors.As(err, &urlErr) {
++		writeWL2GOError(w, http.StatusServiceUnavailable, "network", err)
++		return
++	}
++	writeWL2GOError(w, http.StatusBadGateway, "cms", err)
++}
++
++func writeJSON(w http.ResponseWriter, v any) {
++	w.Header().Set("Content-Type", "application/json")
++	json.NewEncoder(w).Encode(v)
++}
++
++func (h Handler) hybridStationsHandler(w http.ResponseWriter, r *http.Request) {
++	list, err := hybridStationList(r.Context())
++	if err != nil {
++		writeCMSError(w, err)
++		return
++	}
++	out := make([]hybridStationJSON, 0, len(list))
++	for _, s := range list {
++		out = append(out, hybridStationJSON{s.Callsign, s.AutomaticForwarding, s.ManualForwarding})
++	}
++	writeJSON(w, out)
++}
++
++func (h Handler) pickupStationsHandler(w http.ResponseWriter, r *http.Request) {
++	mycall := h.Options().MyCall
++	password := h.Config().SecureLoginPassword
++	pickupStations(w, r, mycall, password)
++}
++
++// pickupStations is the handler body, separated from Handler so the tests can
++// drive it without a whole app.
++func pickupStations(w http.ResponseWriter, r *http.Request, mycall, password string) {
++	ctx := r.Context()
++	if mycall == "" {
++		writeWL2GOError(w, http.StatusBadRequest, "request", errors.New("No callsign configured"))
++		return
++	}
++
++	switch r.Method {
++	case http.MethodGet:
++		list, err := listPickupStations(ctx, mycall)
++		if err != nil {
++			writeCMSError(w, err)
++			return
++		}
++		writeJSON(w, list)
++
++	case http.MethodPost:
++		if password == "" {
++			writeWL2GOError(w, http.StatusBadRequest, "request", errors.New("No Winlink password is configured"))
++			return
++		}
++		var body struct {
++			Callsign string `json:"callsign"`
++		}
++		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
++			writeWL2GOError(w, http.StatusBadRequest, "request", err)
++			return
++		}
++		callsign := strings.ToUpper(strings.TrimSpace(body.Callsign))
++		if !pickupCallsignRe.MatchString(callsign) {
++			writeWL2GOError(w, http.StatusBadRequest, "request", errors.New("Not a valid callsign"))
++			return
++		}
++
++		// Re-read rather than trust the client's copy: the limit is the
++		// account's, and another client may have changed it.
++		current, err := listPickupStations(ctx, mycall)
++		if err != nil {
++			writeCMSError(w, err)
++			return
++		}
++		for _, s := range current {
++			if s.Callsign == callsign {
++				writeJSON(w, current)
++				return
++			}
++		}
++		if len(current) >= MaxPickupStations {
++			writeWL2GOError(w, http.StatusBadRequest, "request",
++				errors.New("Winlink allows at most 3 message pickup stations"))
++			return
++		}
++		if err := mpsAdd(ctx, mycall, mycall, password, callsign); err != nil {
++			writeCMSError(w, err)
++			return
++		}
++		list, err := listPickupStations(ctx, mycall)
++		if err != nil {
++			writeCMSError(w, err)
++			return
++		}
++		writeJSON(w, list)
++
++	case http.MethodDelete:
++		if password == "" {
++			writeWL2GOError(w, http.StatusBadRequest, "request", errors.New("No Winlink password is configured"))
++			return
++		}
++		// The CMS deletes every record for the callsign; there is no
++		// single-entry delete.
++		if err := mpsDelete(ctx, mycall, mycall, password); err != nil {
++			writeCMSError(w, err)
++			return
++		}
++		writeJSON(w, []pickupStationJSON{})
++
++	default:
++		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
++	}
++}
++
++func listPickupStations(ctx context.Context, mycall string) ([]pickupStationJSON, error) {
++	records, err := mpsGet(ctx, mycall, mycall)
++	if err != nil {
++		return nil, err
++	}
++	out := make([]pickupStationJSON, 0, len(records))
++	for _, rec := range records {
++		out = append(out, pickupStationJSON{
++			Callsign: strings.ToUpper(rec.MpsCallsign),
++			AddedAt:  rec.Timestamp.UTC().Format(time.RFC3339),
++		})
++	}
++	return out, nil
++}
+diff --git a/api/wl2go_hybrid_test.go b/api/wl2go_hybrid_test.go
+new file mode 100644
+index 0000000..beb7cbc
+--- /dev/null
++++ b/api/wl2go_hybrid_test.go
+@@ -0,0 +1,140 @@
++package api
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/la5nta/pat/internal/cmsapi"
++)
++
++// fakeMPS swaps the cmsapi calls for an in-memory table for one test.
++func fakeMPS(t *testing.T, initial ...string) *[]string {
++	t.Helper()
++	table := append([]string(nil), initial...)
++	origGet, origAdd, origDelete := mpsGet, mpsAdd, mpsDelete
++	t.Cleanup(func() { mpsGet, mpsAdd, mpsDelete = origGet, origAdd, origDelete })
++
++	mpsGet = func(_ context.Context, _, _ string) ([]cmsapi.MessagePickupStationRecord, error) {
++		out := make([]cmsapi.MessagePickupStationRecord, 0, len(table))
++		for _, call := range table {
++			out = append(out, cmsapi.MessagePickupStationRecord{
++				MpsCallsign: call,
++				Timestamp:   cmsapi.DotNetTime{Time: time.Unix(0, 0)},
++			})
++		}
++		return out, nil
++	}
++	mpsAdd = func(_ context.Context, _, _, _, call string) error {
++		table = append(table, call)
++		return nil
++	}
++	mpsDelete = func(_ context.Context, _, _, _ string) error {
++		table = nil
++		return nil
++	}
++	return &table
++}
++
++func do(method, body, mycall, password string) *httptest.ResponseRecorder {
++	req := httptest.NewRequest(method, "/api/wl2go/mps", strings.NewReader(body))
++	rec := httptest.NewRecorder()
++	pickupStations(rec, req, mycall, password)
++	return rec
++}
++
++func TestPickupAddNormalisesAndReturnsList(t *testing.T) {
++	table := fakeMPS(t)
++	rec := do(http.MethodPost, `{"callsign":" w1aw-10 "}`, "N0CALL", "secret")
++	if rec.Code != http.StatusOK {
++		t.Fatalf("status %d: %s", rec.Code, rec.Body)
++	}
++	if len(*table) != 1 || (*table)[0] != "W1AW-10" {
++		t.Fatalf("table = %v", *table)
++	}
++	var list []pickupStationJSON
++	json.Unmarshal(rec.Body.Bytes(), &list)
++	if len(list) != 1 || list[0].Callsign != "W1AW-10" {
++		t.Fatalf("list = %+v", list)
++	}
++}
++
++func TestPickupAddRejectsAFourth(t *testing.T) {
++	table := fakeMPS(t, "AAA1", "BBB2", "CCC3")
++	rec := do(http.MethodPost, `{"callsign":"DDD4"}`, "N0CALL", "secret")
++	if rec.Code != http.StatusBadRequest {
++		t.Fatalf("status %d, want 400", rec.Code)
++	}
++	if len(*table) != 3 {
++		t.Fatalf("table grew: %v", *table)
++	}
++}
++
++func TestPickupAddIsIdempotent(t *testing.T) {
++	table := fakeMPS(t, "W1AW-10")
++	rec := do(http.MethodPost, `{"callsign":"W1AW-10"}`, "N0CALL", "secret")
++	if rec.Code != http.StatusOK || len(*table) != 1 {
++		t.Fatalf("status %d, table %v", rec.Code, *table)
++	}
++}
++
++func TestPickupAddValidatesCallsign(t *testing.T) {
++	fakeMPS(t)
++	for _, bad := range []string{`{"callsign":""}`, `{"callsign":"W1 AW"}`, `{"callsign":"W1AW-123"}`, `not json`} {
++		if rec := do(http.MethodPost, bad, "N0CALL", "secret"); rec.Code != http.StatusBadRequest {
++			t.Errorf("%s: status %d, want 400", bad, rec.Code)
++		}
++	}
++}
++
++func TestPickupChangesNeedAPassword(t *testing.T) {
++	fakeMPS(t)
++	for _, method := range []string{http.MethodPost, http.MethodDelete} {
++		rec := do(method, `{"callsign":"W1AW"}`, "N0CALL", "")
++		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "password") {
++			t.Errorf("%s: status %d body %s", method, rec.Code, rec.Body)
++		}
++	}
++}
++
++func TestPickupDeleteClears(t *testing.T) {
++	table := fakeMPS(t, "AAA1", "BBB2")
++	if rec := do(http.MethodDelete, "", "N0CALL", "secret"); rec.Code != http.StatusOK {
++		t.Fatalf("status %d", rec.Code)
++	}
++	if len(*table) != 0 {
++		t.Fatalf("table = %v", *table)
++	}
++}
++
++func TestPickupNetworkErrorIsDistinguished(t *testing.T) {
++	fakeMPS(t)
++	mpsGet = func(context.Context, string, string) ([]cmsapi.MessagePickupStationRecord, error) {
++		return nil, &url.Error{Op: "Get", URL: "https://api.winlink.org", Err: errors.New("no route to host")}
++	}
++	rec := do(http.MethodGet, "", "N0CALL", "")
++	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"kind":"network"`) {
++		t.Fatalf("status %d body %s", rec.Code, rec.Body)
++	}
++
++	mpsGet = func(context.Context, string, string) ([]cmsapi.MessagePickupStationRecord, error) {
++		return nil, errors.New("invalid password")
++	}
++	rec = do(http.MethodGet, "", "N0CALL", "")
++	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), `"kind":"cms"`) {
++		t.Fatalf("status %d body %s", rec.Code, rec.Body)
++	}
++}
++
++func TestPickupNeedsACallsign(t *testing.T) {
++	fakeMPS(t)
++	if rec := do(http.MethodGet, "", "", ""); rec.Code != http.StatusBadRequest {
++		t.Fatalf("status %d", rec.Code)
++	}
++}

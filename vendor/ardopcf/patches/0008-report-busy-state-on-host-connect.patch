@@ -1,0 +1,48 @@
+From: WL2GO
+Subject: Report the current busy state to every newly attached host
+
+UpdateBusyDetector emits BUSY TRUE/FALSE only on a transition, and
+TCPSendCommandToHost silently drops anything sent while no host socket is
+attached. A host that connects while the channel is already busy therefore
+never learns it -- it sees nothing until the next transition, which for a
+continuous carrier never comes.
+
+WL2GO attaches a short-lived listener between modem spawn and Pat's dial to
+require 10 consecutive clear seconds before transmitting; without an initial
+state report, an already-busy channel would look clear for the whole window.
+Pat's own waitIfBusy has the same edge-only gap, so this also makes its
+busy-channel fallback see a pre-existing carrier.
+
+Only DISC is reported because that is the only ProtocolState in which the
+busy detector runs (UpdateBusyDetector returns early otherwise), so any
+stored verdict from another state would be stale.
+
+diff --git a/src/common/TCPHostInterface.c b/src/common/TCPHostInterface.c
+index ecffe9b..fc083ea 100644
+--- a/src/common/TCPHostInterface.c
++++ b/src/common/TCPHostInterface.c
+@@ -46,6 +46,9 @@ int _memicmp(unsigned char *a, unsigned char *b, int n);
+ // Defined in ARDOPC.c, set by --hostbind. Empty means INADDR_ANY.
+ extern char HostBindAddr[64];
+ 
++// Current busy-detector verdict (ARDOPC.c); it has no header declaration.
++extern BOOL blnBusyStatus;
++
+ #define GetBuff() _GetBuff(__FILE__, __LINE__)
+ #define ReleaseBuffer(s) _ReleaseBuffer(s, __FILE__, __LINE__)
+ #define Q_REM(s) _Q_REM(s, __FILE__, __LINE__)
+@@ -679,6 +682,14 @@ void TCPHostPoll()
+ 				ioctl(TCPControlSock, FIONBIO, &param);
+ 				CONNECTED = TRUE;
+ //				SendCommandToHost("RDY");
++
++				// BUSY TRUE/FALSE is otherwise sent only on a transition
++				// (UpdateBusyDetector), so a host that attaches while the
++				// channel is already busy would never hear about it. Tell
++				// every newly attached host the current state. Only
++				// meaningful in DISC, the only state the detector runs in.
++				if (ProtocolState == DISC)
++					TCPQueueCommandToHost(blnBusyStatus ? "BUSY TRUE" : "BUSY FALSE");
+ 			}
+ 		}
+ 	}

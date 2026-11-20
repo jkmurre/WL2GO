@@ -1,0 +1,138 @@
+From: WL2GO
+Subject: Bind the WebGui listener too, and remove the dev-mode host-command path
+
+Two changes, both closing the gap patch 0005 recorded as KNOWN GAP.
+
+1. ws_server binds its listener independently of --hostbind, through its own
+   getaddrinfo(NULL, port, AI_PASSIVE) -- the textbook "listen on everything"
+   form. So the command and data ports could sit on loopback while the WebGui
+   port did not. ws_set_bind_addr() follows the existing ws_set_port() shape,
+   and Webgui.c hands it the same HostBindAddr the host interface uses.
+
+   The upstream default is preserved: with no --hostbind, behaviour is
+   unchanged.
+
+2. The "developer mode" reached by passing a NEGATIVE --webgui port is removed
+   from this build. It is the only gate on the Webgui 'H' message, which feeds
+   arbitrary text to ProcessCommandFromHost() -- including RADIOPTTON. A bind
+   address is the right fix for reachability, but it is one mistyped argument
+   away from being wrong, and a remote transmitter-keying path should not
+   depend on nobody ever passing that argument. Upstream itself describes the
+   feature as "an 'undocumented' feature that may be discontinued in future
+   releases".
+
+   A negative port is now a hard exit with a reason rather than a mode switch,
+   so the 'H' path is unreachable in the binary WL2GO ships.
+
+NOTE what neither change covers: the Webgui '2' message fires TWOTONETEST -- a
+real five-second transmission -- and is NOT gated by dev mode. That is why the
+bind address in (1) is not optional, and it is a constraint on any tuning UI
+later built over this interface.
+
+diff --git a/lib/ws_server/ws_server.c b/lib/ws_server/ws_server.c
+index a542627..dc5cb71 100644
+--- a/lib/ws_server/ws_server.c
++++ b/lib/ws_server/ws_server.c
+@@ -160,6 +160,9 @@ int send_retries = 0;  // number of unsuccessfull retry attempts.
+ bool retry_is_http = false;
+ 
+ char ws_port_str[7] = "8088";  // Default.  Can be changed with ws_set_port()
++// Address the listener binds to.  Empty means all interfaces, which is the
++// historical behaviour.  Set with ws_set_bind_addr().
++char ws_bind_addr[64] = "";
+ // ws_uri default can be changed with ws_set_uri().  For the typical expected
+ // usage, the uri of an html file will be set with ws_add_httptarget_file()
+ // or ws_add_httptarget_data().  This will typically be given an easy to type
+@@ -359,6 +362,23 @@ int ws_set_port(int port) {
+ }
+ 
+ 
++// Restrict the listener to one address.
++// This is optional, but is ignored if used after ws_init()
++// Without it the listener binds every interface.
++// Return 0 on success, -1 on failure.
++int ws_set_bind_addr(const char *addr) {
++	if (ws_listening) {
++		ws_error("WS ERROR: Ignoring ws_set_bind_addr() after ws_init()");
++		return (-1);
++	}
++	if (addr == NULL)
++		addr = "";
++	snprintf(ws_bind_addr, sizeof(ws_bind_addr), "%s", addr);
++	ws_debug("WS: WebSocket server bind address set to '%s'.", ws_bind_addr);
++	return (0);
++}
++
++
+ // ws_add_httptarget_file() and/or ws_add_httptarget_data() may be used to
+ // set a small number of uris which may be served as http resources (html,
+ // js, css, etc.).
+@@ -1195,8 +1215,13 @@ SOCKET get_listener_socket(void)
+ 	memset(&hints, 0, sizeof hints);
+ 	hints.ai_family = AF_INET;  // AF_UNSPEC would allow ipv4 or ipv6
+ 	hints.ai_socktype = SOCK_STREAM;
+-	hints.ai_flags = AI_PASSIVE;
+-	if ((rv = getaddrinfo(NULL, ws_port_str, &hints, &ai)) != 0) {
++	// AI_PASSIVE only when no address was given: combined with a node it is
++	// what makes getaddrinfo hand back the wildcard anyway.
++	if (ws_bind_addr[0] == 0)
++		hints.ai_flags = AI_PASSIVE;
++	if ((rv = getaddrinfo(ws_bind_addr[0] ? ws_bind_addr : NULL,
++		ws_port_str, &hints, &ai)) != 0
++	) {
+ 		// TODO:  While gai_strerror() is available for WIN32, the
+ 		// Microsoft documentation recommends using WSAGetLastError()
+ 		// instead.
+diff --git a/lib/ws_server/ws_server.h b/lib/ws_server/ws_server.h
+index a7263cd..38fe98f 100644
+--- a/lib/ws_server/ws_server.h
++++ b/lib/ws_server/ws_server.h
+@@ -12,6 +12,7 @@ typedef void (*ws_vprintf_fcn)(const char*, va_list);
+ // optional, but will be ignored after ws_init()
+ int ws_set_max_clients(unsigned int max_clients);  // override max_clients=10
+ int ws_set_port(int port);  // override default port=8088
++int ws_set_bind_addr(const char *addr);  // override binding all interfaces
+ int ws_set_uri(char *uri);  // override default uri="/ws"
+ void ws_set_retry_limit(int new_retry_limit);  // override retry_limit=10
+ 
+diff --git a/src/common/Webgui.c b/src/common/Webgui.c
+index d028024..594301d 100644
+--- a/src/common/Webgui.c
++++ b/src/common/Webgui.c
+@@ -20,6 +20,9 @@
+ #define MAX_AVGLEN 10  // maximum supported length of FFT averaging
+ 
+ extern int wg_port;  // Port number of WebGui.  If 0, no WebGui
++// Defined in ARDOPC.c, set by --hostbind.  Empty means all interfaces.  The
++// WebGui listener honours the same option as the host command/data ports.
++extern char HostBindAddr[64];
+ extern char webgui_html[];
+ extern char webgui_js[];
+ extern BOOL blnBusyStatus;
+@@ -113,6 +116,7 @@ void WebguiInit() {
+ 	ws_set_debug(&debug_for_ws);
+ 	ws_set_max_clients(MAX_WG_CLIENTS);
+ 	ws_set_port(wg_port);
++	ws_set_bind_addr(HostBindAddr);
+ 	ws_set_uri("/ws");
+ 	ws_set_close_notify(wg_reset_rdata);  // callback
+ 	if ((strcmp(PlaybackDevice, "NOSOUND") == 0)
+--- a/src/common/ARDOPCommon.c
++++ b/src/common/ARDOPCommon.c
+@@ -396,9 +396,13 @@
+ 	}
+ 
+ 	if (wg_port < 0) {
+-		// This is an "undocumented" feature that may be discontinued in future releases
+-		wg_port = -wg_port;
+-		WG_DevMode = TRUE;
++		// Upstream treats a negative port as "developer mode", which is the
++		// only gate on the Webgui 'H' message -- arbitrary host commands fed
++		// to ProcessCommandFromHost(), including RADIOPTTON.  Removed rather
++		// than restricted: a remote transmitter-keying path should not be one
++		// mistyped argument away from being reachable.
++		printf("WebGui developer mode (a negative port) is not available in this build.\n");
++		exit(0);
+ 	}
+ 	if (HostPort[0] != 0x00 && wg_port == atoi(HostPort)) {
+ 		printf(

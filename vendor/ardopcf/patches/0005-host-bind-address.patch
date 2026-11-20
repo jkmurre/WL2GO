@@ -1,0 +1,123 @@
+From: WL2GO
+Subject: Add --hostbind to restrict the host interface to one address
+
+Upstream binds the TCP command and data ports with INADDR_ANY and offers no
+way to change it, so ardopcf's TNC control interface -- including transmit --
+is reachable by anyone who can reach the machine. WL2GO always spawns ardopcf
+locally, so it passes 127.0.0.1.
+
+The upstream default is preserved: with no --hostbind, behaviour is unchanged.
+
+KNOWN GAP -- CLOSED by patch 0006: lib/ws_server/ws_server.c binds
+independently of this option, via its own getaddrinfo/bind, so enabling the
+WebGUI would have brought a listener up on all interfaces and this file's
+loopback guarantee would no longer have held on its own. Patch 0006 extends
+--hostbind to that listener as well.
+
+diff --git a/src/common/ARDOPC.c b/src/common/ARDOPC.c
+index dc69a06..be39a2e 100644
+--- a/src/common/ARDOPC.c
++++ b/src/common/ARDOPC.c
+@@ -110,6 +110,9 @@ int Squelch = 5;
+ int BusyDet = 5;
+ enum _ARQBandwidth ARQBandwidth = B2000MAX;
+ char HostPort[80] = "";
++// Address the host command/data listeners bind to. Empty means INADDR_ANY,
++// which is the historical behaviour. Set with --hostbind.
++char HostBindAddr[64] = "";
+ int port = 8515;
+ BOOL RadioControl = FALSE;
+ BOOL SlowCPU = FALSE;
+diff --git a/src/common/ARDOPCommon.c b/src/common/ARDOPCommon.c
+index 518d8b6..b3bbec3 100644
+--- a/src/common/ARDOPCommon.c
++++ b/src/common/ARDOPCommon.c
+@@ -110,6 +110,7 @@ static struct option long_options[] =
+ 	{"ignorealsaerror", no_argument, 0, 'A'},
+ 	{"help",  no_argument, 0 , 'h'},
+ 	{"list-devices", no_argument, 0 , 1000},
++	{"hostbind", required_argument, 0 , 1001},
+ 	{ NULL , no_argument , NULL , no_argument }
+ };
+ 
+@@ -126,10 +127,13 @@ char HelpScreen[] =
+ 	"--list-devices                       List available audio devices and exit.\n"
+ 	"                                       Prints '#ARDOPCF-DEVICE-LIST 2', then one\n"
+ 	"                                       tab separated line per device:\n"
+ 	"                                       <CAPTURE|PLAYBACK><TAB><index><TAB><host API>\n"
+ 	"                                       <TAB><channels><TAB><default|-><TAB>12k=<yes|no>\n"
+ 	"                                       <TAB><name>.  The name is last because it is\n"
+ 	"                                       the only field that could contain a tab.\n"
++	"--hostbind addr                      Bind the host command and data ports to addr\n"
++	"                                       instead of all interfaces. Use 127.0.0.1 to\n"
++	"                                       accept connections only from this machine.\n"
+ 	"-l path or --logdir path             Path for log files\n"
+ 	"-H string or --hostcommands string   String of semicolon separated host commands to apply\n"
+ 	"                                       to ardopcf during startup, as if they had come from\n"
+@@ -196,6 +200,14 @@ void processargs(int argc, char * argv[])
+ 			// indices this build can actually open.
+ 			exit(ListAudioDevices());
+ 
++		case 1001:
++			// Restrict the host interface to one address. Without this the
++			// listeners bind INADDR_ANY, exposing TNC control -- including
++			// transmit -- to anyone who can reach this machine.
++			strncpy(HostBindAddr, optarg, sizeof(HostBindAddr) - 1);
++			HostBindAddr[sizeof(HostBindAddr) - 1] = 0;
++			break;
++
+ 		case 'h':
+ 
+ 			printf("%s Version %s (https://www.github.com/pflarue/ardop)\n", ProductName, ProductVersion);
+diff --git a/src/common/TCPHostInterface.c b/src/common/TCPHostInterface.c
+index 4044ae4..ecffe9b 100644
+--- a/src/common/TCPHostInterface.c
++++ b/src/common/TCPHostInterface.c
+@@ -20,6 +20,7 @@
+ #include <sys/ioctl.h>
+ #include <errno.h>
+ #include <netdb.h>
++#include <arpa/inet.h>
+ 
+ #include <stdlib.h>
+ #include <sys/ioctl.h>
+@@ -42,6 +43,9 @@ int _memicmp(unsigned char *a, unsigned char *b, int n);
+ 
+ #include "common/ARDOPC.h"
+ 
++// Defined in ARDOPC.c, set by --hostbind. Empty means INADDR_ANY.
++extern char HostBindAddr[64];
++
+ #define GetBuff() _GetBuff(__FILE__, __LINE__)
+ #define ReleaseBuffer(s) _ReleaseBuffer(s, __FILE__, __LINE__)
+ #define Q_REM(s) _Q_REM(s, __FILE__, __LINE__)
+@@ -491,6 +495,8 @@ SOCKET OpenSocket4(int port)
+ 	psin=&local_sin;
+ 	psin->sin_family = AF_INET;
+ 	psin->sin_addr.s_addr = INADDR_ANY;
++	if (HostBindAddr[0])
++		psin->sin_addr.s_addr = inet_addr(HostBindAddr);
+ 
+ 	if (port)
+ 	{
+@@ -537,6 +543,8 @@ SOCKET OpenUDPSocket(int port)
+ 	psin=&local_sin;
+ 	psin->sin_family = AF_INET;
+ 	psin->sin_addr.s_addr = INADDR_ANY;
++	if (HostBindAddr[0])
++		psin->sin_addr.s_addr = inet_addr(HostBindAddr);
+ 
+ 	if (port)
+ 	{
+diff --git a/src/common/ardopcommon.h b/src/common/ardopcommon.h
+index 91d7c21..316a699 100644
+--- a/src/common/ardopcommon.h
++++ b/src/common/ardopcommon.h
+@@ -343,6 +343,7 @@ extern char CaptureDevice[];
+ extern char PlaybackDevice[];
+ extern int port;
+ extern char HostPort[80];
++extern char HostBindAddr[64];
+ extern BOOL RadioControl;
+ extern BOOL SlowCPU;
+ extern BOOL AccumulateStats;

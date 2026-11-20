@@ -1,0 +1,162 @@
+From: WL2GO
+Subject: Require the spawning client's token and exact Host on the HTTP API
+
+Upstream's HTTP API has no authentication, no Host check and no CSRF
+protection, and /api/connect accepts any method. Binding to 127.0.0.1 does not
+help: any web page open in the operator's browser can reach loopback. A plain
+<img src="http://127.0.0.1:PORT/api/connect?url=..."> starts a session (keying
+the transmitter), and DNS rebinding lets a page read the mailbox or PUT config.
+
+With WL2GO_PAT_TOKEN set, every request must carry that token in the
+X-WL2GO-Token header (or, for /ws only, a "token" query parameter) and name
+exactly the listen address in its Host header. A custom header forces a CORS
+preflight this server never answers, and the Host check defeats rebinding.
+The token is removed from the environment once read, so prehooks never see it.
+
+The upstream default is preserved: with the variable unset, behaviour is
+unchanged.
+---
+diff --git a/api/api.go b/api/api.go
+index 7f39760..52c3f68 100644
+--- a/api/api.go
++++ b/api/api.go
+@@ -56,7 +56,7 @@ func ListenAndServe(ctx context.Context, a *app.App, addr string) error {
+ 
+ 	srv := http.Server{
+ 		Addr:    addr,
+-		Handler: handler,
++		Handler: wl2goGuard(addr, takeGuardToken(), handler),
+ 	}
+ 	errs := make(chan error, 1)
+ 	go func() {
+diff --git a/api/wl2go_guard.go b/api/wl2go_guard.go
+new file mode 100644
+index 0000000..f225b63
+--- /dev/null
++++ b/api/wl2go_guard.go
+@@ -0,0 +1,53 @@
++// WL2GO: restricts the HTTP API to the one client that spawned this process.
++
++package api
++
++import (
++	"crypto/subtle"
++	"net/http"
++	"os"
++)
++
++// GuardTokenEnv names the environment variable carrying the per-launch token.
++// It is read once and then removed from the environment, so prehooks and any
++// other child process never inherit it.
++const GuardTokenEnv = "WL2GO_PAT_TOKEN"
++
++// GuardTokenHeader is the request header that must carry the token. A custom
++// header cannot be set by a cross-origin page without a CORS preflight, which
++// this server never answers, so a web page cannot forge an authorized request.
++const GuardTokenHeader = "X-WL2GO-Token"
++
++// wl2goGuard wraps next so that every request must name exactly addr in its
++// Host header (defeating DNS rebinding) and carry the token. For /ws the token
++// may instead be given as the "token" query parameter, since WebSocket clients
++// cannot portably set headers. An empty token disables the guard entirely,
++// preserving upstream behaviour.
++func wl2goGuard(addr, token string, next http.Handler) http.Handler {
++	if token == "" {
++		return next
++	}
++	want := []byte(token)
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Host != addr {
++			http.Error(w, "Forbidden", http.StatusForbidden)
++			return
++		}
++		got := r.Header.Get(GuardTokenHeader)
++		if got == "" && r.URL.Path == "/ws" {
++			got = r.URL.Query().Get("token")
++		}
++		if subtle.ConstantTimeCompare([]byte(got), want) != 1 {
++			http.Error(w, "Forbidden", http.StatusForbidden)
++			return
++		}
++		next.ServeHTTP(w, r)
++	})
++}
++
++// takeGuardToken returns the token and removes it from the environment.
++func takeGuardToken() string {
++	token := os.Getenv(GuardTokenEnv)
++	os.Unsetenv(GuardTokenEnv)
++	return token
++}
+diff --git a/api/wl2go_guard_test.go b/api/wl2go_guard_test.go
+new file mode 100644
+index 0000000..cbab8bb
+--- /dev/null
++++ b/api/wl2go_guard_test.go
+@@ -0,0 +1,66 @@
++package api
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"testing"
++)
++
++func TestWL2GOGuard(t *testing.T) {
++	const addr = "127.0.0.1:17812"
++	const token = "s3cret"
++	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
++	guarded := wl2goGuard(addr, token, ok)
++
++	tests := []struct {
++		name   string
++		host   string
++		target string
++		header string
++		want   int
++	}{
++		{"authorized", addr, "/api/status", token, http.StatusOK},
++		{"missing token", addr, "/api/status", "", http.StatusForbidden},
++		{"wrong token", addr, "/api/status", "nope", http.StatusForbidden},
++		{"rebound host", "evil.example:17812", "/api/status", token, http.StatusForbidden},
++		{"localhost alias", "localhost:17812", "/api/status", token, http.StatusForbidden},
++		{"ws query token", addr, "/ws?token=" + token, "", http.StatusOK},
++		{"ws wrong query token", addr, "/ws?token=nope", "", http.StatusForbidden},
++		{"query token outside ws", addr, "/api/connect?token=" + token, "", http.StatusForbidden},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+tt.target, nil)
++			req.Host = tt.host
++			if tt.header != "" {
++				req.Header.Set(GuardTokenHeader, tt.header)
++			}
++			rec := httptest.NewRecorder()
++			guarded.ServeHTTP(rec, req)
++			if rec.Code != tt.want {
++				t.Errorf("got %d, want %d", rec.Code, tt.want)
++			}
++		})
++	}
++}
++
++func TestWL2GOGuardDisabledWithoutToken(t *testing.T) {
++	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
++	req := httptest.NewRequest(http.MethodGet, "http://anything/api/status", nil)
++	rec := httptest.NewRecorder()
++	wl2goGuard("127.0.0.1:1", "", ok).ServeHTTP(rec, req)
++	if rec.Code != http.StatusOK {
++		t.Errorf("an empty token must leave upstream behaviour unchanged, got %d", rec.Code)
++	}
++}
++
++func TestTakeGuardTokenClearsEnvironment(t *testing.T) {
++	t.Setenv(GuardTokenEnv, "abc")
++	if got := takeGuardToken(); got != "abc" {
++		t.Fatalf("got %q", got)
++	}
++	if _, present := os.LookupEnv(GuardTokenEnv); present {
++		t.Error("token must not remain in the environment for child processes")
++	}
++}

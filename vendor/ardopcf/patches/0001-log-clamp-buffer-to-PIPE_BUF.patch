@@ -1,0 +1,24 @@
+diff --git a/src/common/log.h b/src/common/log.h
+index f749a49..6a538b7 100644
+--- a/src/common/log.h
++++ b/src/common/log.h
+@@ -38,7 +38,19 @@
+  * any data frame as hex with spaces between bytes (so 3 printed bytes per data
+  * byte) plus with some margin.
+  */
++/*
++ * zf_log asserts ZF_LOG_BUF_SZ <= PIPE_BUF, because POSIX only guarantees
++ * write() atomicity up to PIPE_BUF and interleaved log lines would otherwise
++ * be possible. PIPE_BUF is 4096 on Linux but only 512 on macOS and some other
++ * platforms, so a hard-coded 4000 fails to build there. Clamp to whatever the
++ * platform guarantees instead of assuming Linux's value.
++ */
++#include <limits.h>
++#if defined(PIPE_BUF) && PIPE_BUF < 4000
++#define ZF_LOG_BUF_SZ PIPE_BUF
++#else
+ #define ZF_LOG_BUF_SZ 4000
++#endif
+ 
+ /* UTC log timestamps */
+ #define ZF_LOG_USE_UTC_TIME 1

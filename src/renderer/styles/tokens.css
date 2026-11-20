@@ -1,0 +1,101 @@
+/*
+ * WL2GO design tokens.
+ *
+ * The product goal is a deliberately identical look on macOS, Windows and Linux,
+ * so this is an explicit palette rather than native platform styling. Change a
+ * value here and it propagates through the whole app.
+ */
+
+:root {
+  /* Surfaces, from furthest back to closest to the reader. */
+  --bg-app: #f3f4f6;
+  --bg-panel: #ffffff;
+  --bg-subtle: #f7f8fa;
+  --bg-hover: #eceef2;
+  --bg-selected: #dce7f8;
+  --bg-elevated: #ffffff;
+
+  --border: #d8dbe0;
+  --border-strong: #bcc1c9;
+
+  --text: #1c1f24;
+  --text-muted: #5c636e;
+  --text-faint: #878e99;
+  --text-inverse: #ffffff;
+
+  --accent: #1f5fa9;
+  --accent-hover: #17497f;
+  --accent-subtle: #e8f0fb;
+
+  --status-pass: #1a7f4b;
+  --status-warn: #a86709;
+  --status-fail: #b3261e;
+  --status-pending: #6b7280;
+
+  --status-pass-bg: #e6f4ec;
+  --status-warn-bg: #fdf3e3;
+  --status-fail-bg: #fbeae9;
+  --status-pending-bg: #eef0f3;
+
+  --shadow-panel: 0 1px 2px rgba(16, 20, 28, 0.06), 0 2px 8px rgba(16, 20, 28, 0.04);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 19px;
+
+  --sidebar-width: 216px;
+  --list-width: 340px;
+  --toolbar-height: 48px;
+  --statusbar-height: 26px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-app: #14171c;
+    --bg-panel: #1b1e24;
+    --bg-subtle: #21252c;
+    --bg-hover: #262b33;
+    --bg-selected: #2b3a4f;
+    --bg-elevated: #232830;
+
+    --border: #2e343d;
+    --border-strong: #3d444f;
+
+    --text: #e7eaef;
+    --text-muted: #a2abb8;
+    --text-faint: #77808d;
+    --text-inverse: #10131a;
+
+    --accent: #5c9ce6;
+    --accent-hover: #7db0ec;
+    --accent-subtle: #1e2b3c;
+
+    --status-pass: #4ac07f;
+    --status-warn: #e0a34a;
+    --status-fail: #ef6f68;
+    --status-pending: #8d95a1;
+
+    --status-pass-bg: #16281f;
+    --status-warn-bg: #2b2317;
+    --status-fail-bg: #2e1c1b;
+    --status-pending-bg: #22262d;
+
+    --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.25);
+  }
+}

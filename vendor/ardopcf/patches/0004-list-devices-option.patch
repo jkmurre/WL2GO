@@ -1,0 +1,52 @@
+diff --git a/src/common/ARDOPCommon.c b/src/common/ARDOPCommon.c
+index c6c068c..518d8b6 100644
+--- a/src/common/ARDOPCommon.c
++++ b/src/common/ARDOPCommon.c
+@@ -109,6 +109,7 @@ static struct option long_options[] =
+ 	{"sdft", no_argument, 0, 's'},
+ 	{"ignorealsaerror", no_argument, 0, 'A'},
+ 	{"help",  no_argument, 0 , 'h'},
++	{"list-devices", no_argument, 0 , 1000},
+ 	{ NULL , no_argument , NULL , no_argument }
+ };
+ 
+@@ -122,6 +123,13 @@ char HelpScreen[] =
+ 	"\n"
+ 	"Optional Paramters\n"
+ 	"-h or --help                         Display this help screen.\n"
++	"--list-devices                       List available audio devices and exit.\n"
++	"                                       Prints '#ARDOPCF-DEVICE-LIST 2', then one\n"
++	"                                       tab separated line per device:\n"
++	"                                       <CAPTURE|PLAYBACK><TAB><index><TAB><host API>\n"
++	"                                       <TAB><channels><TAB><default|-><TAB>12k=<yes|no>\n"
++	"                                       <TAB><name>.  The name is last because it is\n"
++	"                                       the only field that could contain a tab.\n"
+ 	"-l path or --logdir path             Path for log files\n"
+ 	"-H string or --hostcommands string   String of semicolon separated host commands to apply\n"
+ 	"                                       to ardopcf during startup, as if they had come from\n"
+@@ -182,6 +186,12 @@ void processargs(int argc, char * argv[])
+ 		// Handle options
+ 		switch (c)
+ 		{
++		case 1000:
++			// Enumerate audio devices for a host program and exit. Implemented
++			// by the audio backend, so it reports exactly the devices and
++			// indices this build can actually open.
++			exit(ListAudioDevices());
++
+ 		case 'h':
+ 
+ 			printf("%s Version %s (https://www.github.com/pflarue/ardop)\n", ProductName, ProductVersion);
+diff --git a/src/common/ardopcommon.h b/src/common/ardopcommon.h
+index 91cf281..91d7c21 100644
+--- a/src/common/ardopcommon.h
++++ b/src/common/ardopcommon.h
+@@ -210,6 +210,8 @@ void FreeSemaphore();
+ const char * Name(UCHAR bytID);
+ const char * shortName(UCHAR bytID);
+ int InitSound();
++// Implemented by the audio backend; used by --list-devices.
++int ListAudioDevices();
+ void initFilter(int Width, int centerFreq);
+ void FourierTransform(int NumSamples, float * RealIn, float * RealOut, float * ImagOut, int InverseTransform);
+ VOID LostHost();
